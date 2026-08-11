@@ -70,7 +70,8 @@ sudo bash install.sh
 - `SPD_SPEEDTEST_TIMEOUT_SECONDS`：全部分批测速的总超时，默认 `600` 秒。
 - `SPD_GITHUB_TIMEOUT_SECONDS`：GitHub 上传超时，默认 `300` 秒。
 - `SPD_MAX_PENDING_IPS`：待测速 IP 总数上限，默认和 Worker 上限均为 `300`。
-- `SPD_SPEEDTEST_BATCH_SIZE`：每批测速数量，默认 `20`，Worker 单批上限 `50`。
+- `SPD_SPEEDTEST_BATCH_SIZE`：每批测速数量，默认和 Worker 单批上限均为 `20`。
+- `SPD_SPEEDTEST_BATCH_RETRIES`：每批失败后的最多尝试次数，默认 `3`；重试复用同一批结果。
 - `SPD_STEP_DELAY_SECONDS`：清空、上传和测速批次之间的间隔，默认 `2` 秒。
 - `SPD_FILE_STABLE_SECONDS`：上传前文件保持不变的时间，默认 `20` 秒。
 - `SPD_FILE_STABLE_TIMEOUT_SECONDS`：等待文件稳定的上限，默认 `60` 秒。
@@ -118,6 +119,9 @@ journalctl -u spd-telegram-cleanup.service -f
 - **Cloudflare 检测**：识别 `cf-mitigated: challenge` 和非 JSON 验证页面。
 - **当天多文件上传**：按修改时间选择当天全部 CSV，逐个上传并合并去重。
 - **分批测速**：默认最多保留 300 个待测速 IP，每批测试 20 个直到完成。
+- **低 KV 写入**：每批只更新一次进度，最后一批才汇总并写入优质 IP。
+- **任务隔离与幂等重试**：每轮测速使用独立 `runId`，相同批次重试不会重复测速。
+- **临时状态自动过期**：任务快照和独立批次结果在 24 小时后由 KV 自动清理。
 - **安全选取文件**：每个 CSV 保持 20 秒不再变化后才上传。
 - **防止并发冲突**：测速任务和 Telegram 清理命令共用文件锁。
 - **可靠定时执行**：systemd timer 每天北京时间 09:00 运行，支持错过后补执行。

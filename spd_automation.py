@@ -26,6 +26,7 @@ SPEEDTEST_TIMEOUT_SECONDS = int(os.getenv("SPD_SPEEDTEST_TIMEOUT_SECONDS", "600"
 GITHUB_TIMEOUT_SECONDS = int(os.getenv("SPD_GITHUB_TIMEOUT_SECONDS", "300"))
 MAX_PENDING_IPS = int(os.getenv("SPD_MAX_PENDING_IPS", "300"))
 SPEEDTEST_BATCH_SIZE = int(os.getenv("SPD_SPEEDTEST_BATCH_SIZE", "20"))
+SPEEDTEST_BATCH_RETRIES = int(os.getenv("SPD_SPEEDTEST_BATCH_RETRIES", "3"))
 STEP_DELAY_SECONDS = int(os.getenv("SPD_STEP_DELAY_SECONDS", "2"))
 FILE_STABLE_SECONDS = int(os.getenv("SPD_FILE_STABLE_SECONDS", "20"))
 FILE_STABLE_TIMEOUT_SECONDS = int(os.getenv("SPD_FILE_STABLE_TIMEOUT_SECONDS", "60"))
@@ -207,31 +208,60 @@ def upload_csv(csv_path: Path) -> dict:
 def run_speedtest(total_ips: int) -> str:
     if total_ips <= 0:
         raise RuntimeError("没有可测速的上传 IP")
-    offset = tested = batches = 0
+    offset = successful = attempted = batches = 0
+    run_id = uuid.uuid4().hex
     deadline = time.monotonic() + SPEEDTEST_TIMEOUT_SECONDS
     while offset < total_ips:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError(f"分批测速超过 {SPEEDTEST_TIMEOUT_SECONDS} 秒总时限")
         batches += 1
-        LOG.info("开始第 %s 批测速: offset=%s, batchSize=%s", batches, offset, SPEEDTEST_BATCH_SIZE)
-        body = json.dumps({"maxTests": SPEEDTEST_BATCH_SIZE, "offset": offset}).encode("utf-8")
-        data = require_success(
-            request_json(
-                "/manual-speedtest", method="POST", body=body,
-                headers={"Content-Type": "application/json"},
-                timeout=max(1, math.ceil(remaining)),
-            ),
-            "测速",
-        )
+        LOG.info("开始第 %s 批测速: runId=%s, offset=%s, batchSize=%s", batches, run_id, offset, SPEEDTEST_BATCH_SIZE)
+        body = json.dumps({
+            "maxTests": SPEEDTEST_BATCH_SIZE,
+            "offset": offset,
+            "runId": run_id,
+        }).encode("utf-8")
+        data = None
+        for attempt in range(1, max(1, SPEEDTEST_BATCH_RETRIES) + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"分批测速超过 {SPEEDTEST_TIMEOUT_SECONDS} 秒总时限")
+            try:
+                data = require_success(
+                    request_json(
+                        "/manual-speedtest", method="POST", body=body,
+                        headers={"Content-Type": "application/json"},
+                        timeout=max(1, math.ceil(remaining)),
+                    ),
+                    "测速",
+                )
+                break
+            except RuntimeError:
+                if attempt >= max(1, SPEEDTEST_BATCH_RETRIES):
+                    raise
+                LOG.warning("第 %s 批请求失败，%s 秒后使用同一 runId 重试（%s/%s）", batches, STEP_DELAY_SECONDS, attempt, SPEEDTEST_BATCH_RETRIES)
+                if STEP_DELAY_SECONDS > 0:
+                    time.sleep(min(STEP_DELAY_SECONDS, max(0, deadline - time.monotonic())))
+        if data is None:
+            raise RuntimeError("Worker 测速未返回结果")
+        if data.get("runId") != run_id:
+            raise RuntimeError("Worker 返回了错误的 runId")
+        worker_total = int(data.get("total", total_ips))
+        if batches == 1:
+            total_ips = worker_total
+        elif worker_total != total_ips:
+            raise RuntimeError("同一测速任务返回的 IP 总数发生变化")
         next_offset = int(data.get("nextOffset", offset + min(SPEEDTEST_BATCH_SIZE, total_ips - offset)))
         if next_offset <= offset:
             raise RuntimeError("Worker 测速没有推进进度")
+        previous_offset = offset
         offset = min(next_offset, total_ips)
-        tested += int(data.get("batchTested", data.get("tested", 0)))
+        successful += int(data.get("batchTested", data.get("tested", 0)))
+        attempted += int(data.get("attempted", offset - previous_offset))
         if offset < total_ips and STEP_DELAY_SECONDS > 0:
             time.sleep(STEP_DELAY_SECONDS)
-    result = f"测速完成，共 {tested} 个 IP，分 {batches} 批"
+    result = f"测速完成，尝试 {attempted} 个、成功 {successful} 个，分 {batches} 批"
     LOG.info(result)
     return result
 

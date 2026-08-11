@@ -36,15 +36,20 @@ class WorkerHandler(BaseHTTPRequestHandler):
             assert b"1.1.1.1" in body
             self.respond({"success": True, "count": 1, "addedCount": 1})
         elif self.path == "/manual-speedtest":
-            assert json.loads(body) == {"maxTests": 20, "offset": 0}
+            payload = json.loads(body)
+            assert payload["maxTests"] == 20
+            assert payload["offset"] == 0
+            assert len(payload["runId"]) == 32
             self.respond(
                 {
                     "success": True,
                     "tested": 1,
                     "batchTested": 1,
+                    "attempted": 1,
                     "nextOffset": 1,
                     "total": 1,
                     "complete": True,
+                    "runId": payload["runId"],
                     "source": "uploaded",
                     "duration": "100ms",
                 }
@@ -88,6 +93,7 @@ class ApiTests(unittest.TestCase):
         app.API_TOKEN = "test-token"
         app.MAX_PENDING_IPS = 300
         app.SPEEDTEST_BATCH_SIZE = 20
+        app.SPEEDTEST_BATCH_RETRIES = 3
         app.STEP_DELAY_SECONDS = 0
 
     @classmethod
@@ -139,12 +145,37 @@ class ApiTests(unittest.TestCase):
             return {
                 "success": True,
                 "batchTested": next_offset - payload["offset"],
+                "attempted": next_offset - payload["offset"],
                 "nextOffset": next_offset,
+                "total": 45,
+                "runId": payload["runId"],
             }
 
         with patch.object(app, "request_json", side_effect=fake_request):
             self.assertIn("分 3 批", app.run_speedtest(45))
         self.assertEqual(offsets, [0, 20, 40])
+
+    def test_speedtest_retry_reuses_run_id_and_offset(self):
+        payloads = []
+
+        def flaky_request(_path, **kwargs):
+            payload = json.loads(kwargs["body"])
+            payloads.append(payload)
+            if len(payloads) == 1:
+                raise RuntimeError("temporary failure")
+            return {
+                "success": True,
+                "batchTested": 1,
+                "attempted": 1,
+                "nextOffset": 1,
+                "total": 1,
+                "runId": payload["runId"],
+            }
+
+        with patch.object(app, "request_json", side_effect=flaky_request):
+            app.run_speedtest(1)
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(payloads[0], payloads[1])
 
     def test_cloudflare_challenge_is_reported(self):
         with self.assertRaisesRegex(RuntimeError, "Cloudflare Challenge"):
