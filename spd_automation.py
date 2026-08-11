@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Upload the newest CSV to the SPD Worker API, test IPs, then publish to GitHub."""
+"""Upload today's CSV files, test their IPs in batches, then publish to GitHub."""
 
 from __future__ import annotations
 
 import fcntl
 import json
 import logging
+import math
 import os
 import sys
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin
@@ -22,8 +24,10 @@ API_TOKEN = os.getenv("SPD_API_TOKEN", "").strip()
 UPLOAD_TIMEOUT_SECONDS = int(os.getenv("SPD_UPLOAD_TIMEOUT_SECONDS", "300"))
 SPEEDTEST_TIMEOUT_SECONDS = int(os.getenv("SPD_SPEEDTEST_TIMEOUT_SECONDS", "600"))
 GITHUB_TIMEOUT_SECONDS = int(os.getenv("SPD_GITHUB_TIMEOUT_SECONDS", "300"))
-MAX_TESTS = int(os.getenv("SPD_MAX_TESTS", "25"))
-FILE_STABLE_SECONDS = int(os.getenv("SPD_FILE_STABLE_SECONDS", "5"))
+MAX_PENDING_IPS = int(os.getenv("SPD_MAX_PENDING_IPS", "300"))
+SPEEDTEST_BATCH_SIZE = int(os.getenv("SPD_SPEEDTEST_BATCH_SIZE", "20"))
+STEP_DELAY_SECONDS = int(os.getenv("SPD_STEP_DELAY_SECONDS", "2"))
+FILE_STABLE_SECONDS = int(os.getenv("SPD_FILE_STABLE_SECONDS", "20"))
 FILE_STABLE_TIMEOUT_SECONDS = int(os.getenv("SPD_FILE_STABLE_TIMEOUT_SECONDS", "60"))
 STATE_DIR = Path("/var/lib/spd-automation")
 TELEGRAM_BOT_TOKEN = os.getenv("bot_token", "").strip()
@@ -44,17 +48,20 @@ def compact_text(value: str, limit: int = 600) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def newest_csv(directory: Path) -> Path:
+def todays_csv(directory: Path) -> list[Path]:
     if not directory.is_dir():
         raise RuntimeError(f"CSV 目录不存在或不是目录: {directory}")
+    today = datetime.now().date()
     files = [
         path
         for path in directory.iterdir()
-        if path.is_file() and path.suffix.lower() == ".csv"
+        if path.is_file()
+        and path.suffix.lower() == ".csv"
+        and datetime.fromtimestamp(path.stat().st_mtime).date() == today
     ]
     if not files:
-        raise RuntimeError(f"目录中没有 CSV 文件: {directory}")
-    return max(files, key=lambda path: (path.stat().st_mtime_ns, path.name)).resolve()
+        raise RuntimeError(f"目录中没有今天的 CSV 文件: {directory}")
+    return sorted(files, key=lambda path: (path.stat().st_mtime_ns, path.name))
 
 
 def wait_for_stable_file(path: Path) -> None:
@@ -156,20 +163,33 @@ def require_success(data: dict, operation: str) -> dict:
     return data
 
 
-def multipart_file_body(csv_path: Path) -> tuple[bytes, str]:
+def multipart_file_body(csv_path: Path, *, max_pending_ips: int) -> tuple[bytes, str]:
     boundary = f"----spd-automation-{uuid.uuid4().hex}"
     content = csv_path.read_bytes()
     body = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="ipfile"; filename="upload.csv"\r\n'
         "Content-Type: text/csv\r\n\r\n"
-    ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("ascii")
+    ).encode("utf-8") + content + (
+        f"\r\n--{boundary}\r\n"
+        'Content-Disposition: form-data; name="maxIPs"\r\n\r\n'
+        f"{max_pending_ips}\r\n"
+        f"--{boundary}--\r\n"
+    ).encode("utf-8")
     return body, boundary
 
 
-def upload_csv(csv_path: Path) -> str:
-    LOG.info("上传最新 CSV: %s", csv_path)
-    body, boundary = multipart_file_body(csv_path)
+def clear_uploaded_ips() -> dict:
+    LOG.info("清空 Worker 待测速 IP 列表")
+    return require_success(
+        request_json("/clear-uploaded-ips", method="POST", body=b"", timeout=UPLOAD_TIMEOUT_SECONDS),
+        "清空待测速列表",
+    )
+
+
+def upload_csv(csv_path: Path) -> dict:
+    LOG.info("上传当天 CSV: %s", csv_path)
+    body, boundary = multipart_file_body(csv_path, max_pending_ips=MAX_PENDING_IPS)
     data = require_success(
         request_json(
             "/upload-ips",
@@ -180,28 +200,38 @@ def upload_csv(csv_path: Path) -> str:
         ),
         "上传解析",
     )
-    result = f"成功解析 {data.get('count', 0)} 个 IP"
-    LOG.info(result)
-    return result
+    LOG.info("已合并去重，待测速 IP 数量: %s", data.get("count", 0))
+    return data
 
 
-def run_speedtest() -> str:
-    LOG.info("开始 Worker API 测速，maxTests=%s", MAX_TESTS)
-    body = json.dumps({"maxTests": MAX_TESTS}).encode("utf-8")
-    data = require_success(
-        request_json(
-            "/manual-speedtest",
-            method="POST",
-            body=body,
-            headers={"Content-Type": "application/json"},
-            timeout=SPEEDTEST_TIMEOUT_SECONDS,
-        ),
-        "测速",
-    )
-    result = (
-        f"测试完成，优质 IP {data.get('tested', 0)} 个，"
-        f"来源 {data.get('source', 'unknown')}，耗时 {data.get('duration', 'unknown')}"
-    )
+def run_speedtest(total_ips: int) -> str:
+    if total_ips <= 0:
+        raise RuntimeError("没有可测速的上传 IP")
+    offset = tested = batches = 0
+    deadline = time.monotonic() + SPEEDTEST_TIMEOUT_SECONDS
+    while offset < total_ips:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"分批测速超过 {SPEEDTEST_TIMEOUT_SECONDS} 秒总时限")
+        batches += 1
+        LOG.info("开始第 %s 批测速: offset=%s, batchSize=%s", batches, offset, SPEEDTEST_BATCH_SIZE)
+        body = json.dumps({"maxTests": SPEEDTEST_BATCH_SIZE, "offset": offset}).encode("utf-8")
+        data = require_success(
+            request_json(
+                "/manual-speedtest", method="POST", body=body,
+                headers={"Content-Type": "application/json"},
+                timeout=max(1, math.ceil(remaining)),
+            ),
+            "测速",
+        )
+        next_offset = int(data.get("nextOffset", offset + min(SPEEDTEST_BATCH_SIZE, total_ips - offset)))
+        if next_offset <= offset:
+            raise RuntimeError("Worker 测速没有推进进度")
+        offset = min(next_offset, total_ips)
+        tested += int(data.get("batchTested", data.get("tested", 0)))
+        if offset < total_ips and STEP_DELAY_SECONDS > 0:
+            time.sleep(STEP_DELAY_SECONDS)
+    result = f"测速完成，共 {tested} 个 IP，分 {batches} 批"
     LOG.info(result)
     return result
 
@@ -253,8 +283,9 @@ def send_telegram(message: str) -> None:
 def main() -> int:
     started = time.monotonic()
     stage = "初始化"
-    csv_path: Path | None = None
+    csv_paths: list[Path] = []
     upload_result = ""
+    total_uploaded = 0
     speedtest_result = ""
     github_result = ""
     job_lock = None
@@ -267,15 +298,25 @@ def main() -> int:
 
         stage = "获取任务锁"
         job_lock = acquire_job_lock()
-        stage = "选择并检查 CSV"
-        csv_path = newest_csv(CSV_DIR)
-        wait_for_stable_file(csv_path)
+        stage = "选择并检查当天 CSV"
+        csv_paths = todays_csv(CSV_DIR)
+        for csv_path in csv_paths:
+            wait_for_stable_file(csv_path)
         LOG.info("任务开始，Worker=%s", URL)
 
-        stage = "上传并解析 CSV"
-        upload_result = upload_csv(csv_path)
+        stage = "清空待测速列表"
+        clear_uploaded_ips()
+        if STEP_DELAY_SECONDS > 0:
+            time.sleep(STEP_DELAY_SECONDS)
+        stage = "上传并解析当天 CSV"
+        for index, csv_path in enumerate(csv_paths):
+            upload_data = upload_csv(csv_path)
+            total_uploaded = int(upload_data.get("count", 0))
+            if index + 1 < len(csv_paths) and STEP_DELAY_SECONDS > 0:
+                time.sleep(STEP_DELAY_SECONDS)
+        upload_result = f"合并去重后 {total_uploaded} 个待测速 IP"
         stage = "Worker API 测速"
-        speedtest_result = run_speedtest()
+        speedtest_result = run_speedtest(total_uploaded)
         stage = "上传到 GitHub"
         github_result = upload_to_github()
     except Exception as error:
@@ -284,7 +325,7 @@ def main() -> int:
         send_telegram(
             "❌ SPD 自动化执行失败\n"
             f"阶段: {stage}\n"
-            f"CSV: {csv_path.name if csv_path else '未选择'}\n"
+            f"CSV: {', '.join(path.name for path in csv_paths) if csv_paths else '未选择'}\n"
             f"错误: {compact_text(str(error))}\n"
             f"耗时: {elapsed} 秒"
         )
@@ -296,7 +337,7 @@ def main() -> int:
     LOG.info("全部步骤成功完成")
     send_telegram(
         "✅ SPD 自动化执行成功\n"
-        f"CSV: {csv_path.name if csv_path else '未知'}\n"
+        f"CSV: {', '.join(path.name for path in csv_paths)}\n"
         f"上传: {upload_result}\n"
         f"测速: {speedtest_result}\n"
         f"GitHub: {github_result}\n"

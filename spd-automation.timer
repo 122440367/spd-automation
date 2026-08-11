@@ -1,8 +1,8 @@
 [Unit]
-Description=Run SPD automation every day at 07:01 Asia/Shanghai
+Description=Run SPD automation every day at 09:00 Asia/Shanghai
 
 [Timer]
-OnCalendar=*-*-* 07:01:00 Asia/Shanghai
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
 Persistent=true
 Unit=spd-automation.service
 

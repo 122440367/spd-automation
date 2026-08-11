@@ -1,5 +1,5 @@
 [Unit]
-Description=Upload newest ASN CSV to SPD, run speed test, and publish to GitHub
+Description=Upload today's ASN CSV files to SPD, run speed tests, and publish to GitHub
 Wants=network-online.target
 After=network-online.target
 
@@ -9,6 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/spd-automation
 EnvironmentFile=/etc/spd-automation.env
+Environment=TZ=Asia/Shanghai
 ExecStart=/usr/bin/python3 /opt/spd-automation/spd_automation.py
 TimeoutStartSec=25min
 
