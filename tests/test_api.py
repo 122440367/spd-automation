@@ -21,6 +21,7 @@ import spd_automation as app
 
 class WorkerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
+        assert self.headers.get("Authorization") == "Bearer test-token"
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         if self.path == "/upload-ips":
@@ -73,8 +74,7 @@ class ApiTests(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         app.URL = f"http://127.0.0.1:{cls.server.server_port}/"
-        app.USERNAME = ""
-        app.PASSWORD = ""
+        app.API_TOKEN = "test-token"
         app.MAX_TESTS = 25
 
     @classmethod

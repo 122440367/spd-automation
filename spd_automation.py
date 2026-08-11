@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import fcntl
 import json
 import logging
@@ -19,8 +18,7 @@ from urllib.request import Request, urlopen
 
 URL = os.getenv("SPD_URL", "").strip()
 CSV_DIR = Path(os.getenv("SPD_CSV_DIR", "/root/ASNIPtest"))
-USERNAME = os.getenv("SPD_USERNAME", "").strip()
-PASSWORD = os.getenv("SPD_PASSWORD", "")
+API_TOKEN = os.getenv("SPD_API_TOKEN", "").strip()
 UPLOAD_TIMEOUT_SECONDS = int(os.getenv("SPD_UPLOAD_TIMEOUT_SECONDS", "300"))
 SPEEDTEST_TIMEOUT_SECONDS = int(os.getenv("SPD_SPEEDTEST_TIMEOUT_SECONDS", "600"))
 GITHUB_TIMEOUT_SECONDS = int(os.getenv("SPD_GITHUB_TIMEOUT_SECONDS", "300"))
@@ -98,10 +96,7 @@ def api_url(path: str) -> str:
 
 
 def authentication_headers() -> dict[str, str]:
-    if not USERNAME or not PASSWORD:
-        return {}
-    credentials = base64.b64encode(f"{USERNAME}:{PASSWORD}".encode("utf-8")).decode("ascii")
-    return {"Authorization": f"Basic {credentials}"}
+    return {"Authorization": f"Bearer {API_TOKEN}"}
 
 
 def request_json(
@@ -267,10 +262,8 @@ def main() -> int:
     try:
         if not URL:
             raise RuntimeError("必须通过 SPD_URL 环境变量配置 Worker 地址")
-        if PASSWORD and not USERNAME:
-            LOG.warning(
-                "SPD_PASSWORD 已配置但没有 SPD_USERNAME；当前 Worker API 不使用页面密码"
-            )
+        if not API_TOKEN:
+            raise RuntimeError("必须通过 SPD_API_TOKEN 环境变量配置 API Token")
 
         stage = "获取任务锁"
         job_lock = acquire_job_lock()

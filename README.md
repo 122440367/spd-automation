@@ -20,11 +20,21 @@ nano .env
 sudo bash install.sh
 ```
 
-`.env` 中只需填写 Worker 地址：
+生成一个随机 Token：
+
+```bash
+openssl rand -hex 32
+```
+
+将同一个值分别添加到 Cloudflare Worker Secret 和本项目 `.env`。`.env` 必填：
 
 ```env
 SPD_URL=https://your-spd-domain.example/
+SPD_API_TOKEN=replace_with_the_same_random_token
 ```
+
+Cloudflare 控制台路径通常为：`Workers & Pages → 你的 Worker → Settings →
+Variables and Secrets → Add`。变量名填写 `SPD_API_TOKEN`，类型选择 Secret。
 
 手动执行并查看日志：
 
@@ -53,6 +63,7 @@ sudo bash install.sh
 ## 配置项
 
 - `SPD_URL`：Worker 地址，必填。
+- `SPD_API_TOKEN`：Worker API Bearer Token，必填，必须与 Worker Secret 一致。
 - `SPD_CSV_DIR`：CSV 目录，默认 `/root/ASNIPtest`。
 - `SPD_UPLOAD_TIMEOUT_SECONDS`：上传超时，默认 `300` 秒。
 - `SPD_SPEEDTEST_TIMEOUT_SECONDS`：测速超时，默认 `600` 秒。
@@ -60,12 +71,16 @@ sudo bash install.sh
 - `SPD_MAX_TESTS`：最多测试的 IP 数量，默认 `25`，Worker 上限 `50`。
 - `SPD_FILE_STABLE_SECONDS`：上传前文件保持不变的时间，默认 `5` 秒。
 - `SPD_FILE_STABLE_TIMEOUT_SECONDS`：等待文件稳定的上限，默认 `60` 秒。
-- `SPD_USERNAME`、`SPD_PASSWORD`：可选 HTTP Basic Auth，必须同时配置。
 - `bot_token`、`chat_id`：可选 Telegram 通知和命令功能。
 
-当前仓库参考的 `worker.js` 没有校验页面密码，因此 API 模式不需要
-`SPD_PASSWORD`。如果以后在 Worker 前增加 HTTP Basic Auth，再同时配置
-`SPD_USERNAME` 和 `SPD_PASSWORD`。
+自动化请求通过以下请求头认证：
+
+```text
+Authorization: Bearer <SPD_API_TOKEN>
+```
+
+Worker 会保护 `/update`、`/upload-ips`、`/manual-speedtest` 和
+`/upload-to-github`。Worker 未配置 Secret、请求缺少 Token 或 Token 错误时都会拒绝。
 
 ## Telegram 命令
 
@@ -95,6 +110,7 @@ journalctl -u spd-telegram-cleanup.service -f
 
 - **低磁盘占用**：不安装浏览器、虚拟环境或第三方 Python 包。
 - **状态驱动**：每一步验证 Worker 返回的 JSON 和 `success` 状态。
+- **API Token 认证**：所有写操作接口使用 Bearer Token，Worker 未配置 Token 时默认拒绝。
 - **Cloudflare 检测**：识别 `cf-mitigated: challenge` 和非 JSON 验证页面。
 - **安全选取文件**：选择最新 CSV，并确认文件不再变化后才上传。
 - **防止并发冲突**：测速任务和 Telegram 清理命令共用文件锁。

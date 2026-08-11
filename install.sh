@@ -15,7 +15,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 if [[ ! -f ${local_env_file} ]]; then
     echo "缺少本地环境配置: ${local_env_file}" >&2
-    echo "请先执行: cp example.env .env，然后编辑 .env 填写 Worker 地址。" >&2
+    echo "请先执行: cp example.env .env，然后填写 Worker 地址和 API Token。" >&2
     exit 1
 fi
 
