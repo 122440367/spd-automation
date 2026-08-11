@@ -1,0 +1,23 @@
+[Unit]
+Description=Telegram bot for SPD CSV cleanup commands
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/spd-automation
+EnvironmentFile=/etc/spd-automation.env
+ExecStart=/opt/spd-automation/.venv/bin/python /opt/spd-automation/telegram_cleanup_bot.py
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=-/root/ASNIPtest /var/lib/spd-automation
+
+[Install]
+WantedBy=multi-user.target

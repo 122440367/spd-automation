@@ -1,0 +1,24 @@
+[Unit]
+Description=Upload newest ASN CSV to SPD, run speed test, and publish to GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/spd-automation
+EnvironmentFile=/etc/spd-automation.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/spd-automation/browsers
+ExecStart=/opt/spd-automation/.venv/bin/python /opt/spd-automation/spd_automation.py
+TimeoutStartSec=25min
+
+# Basic hardening. The job must read /root/ASNIPtest and write failure artifacts.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=/root/ASNIPtest
+ReadWritePaths=/var/lib/spd-automation
+
+[Install]
+WantedBy=multi-user.target

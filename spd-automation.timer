@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SPD automation every day at 07:01 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 07:01:00 Asia/Shanghai
+Persistent=true
+Unit=spd-automation.service
+
+[Install]
+WantedBy=timers.target
