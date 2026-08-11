@@ -9,11 +9,10 @@ User=root
 Group=root
 WorkingDirectory=/opt/spd-automation
 EnvironmentFile=/etc/spd-automation.env
-Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/spd-automation/browsers
-ExecStart=/opt/spd-automation/.venv/bin/python /opt/spd-automation/spd_automation.py
+ExecStart=/usr/bin/python3 /opt/spd-automation/spd_automation.py
 TimeoutStartSec=25min
 
-# Basic hardening. The job must read /root/ASNIPtest and write failure artifacts.
+# Basic hardening. The job reads CSV files and writes only its lock/state directory.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

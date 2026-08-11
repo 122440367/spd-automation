@@ -12,20 +12,32 @@ env_file=/etc/spd-automation.env
 local_env_file="${source_dir}/.env"
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y python3 python3-venv ca-certificates
+
+if [[ ! -f ${local_env_file} ]]; then
+    echo "缺少本地环境配置: ${local_env_file}" >&2
+    echo "请先执行: cp example.env .env，然后编辑 .env 填写 Worker 地址。" >&2
+    exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1 || [[ ! -f /etc/ssl/certs/ca-certificates.crt ]]; then
+    apt-get update
+    apt-get install -y --no-install-recommends python3 ca-certificates
+fi
+apt-get clean
 
 install -d -m 0755 "${install_dir}"
 install -d -m 0750 /var/lib/spd-automation
 install -m 0755 "${source_dir}/spd_automation.py" "${install_dir}/spd_automation.py"
 install -m 0755 "${source_dir}/telegram_cleanup_bot.py" "${install_dir}/telegram_cleanup_bot.py"
-install -m 0644 "${source_dir}/requirements.txt" "${install_dir}/requirements.txt"
 
-if [[ ! -f ${local_env_file} ]]; then
-    echo "缺少本地环境配置: ${local_env_file}" >&2
-    echo "请先执行: cp example.env .env，然后编辑 .env 填写真实密码。" >&2
-    exit 1
+# 清除旧版 Playwright、Chromium 和虚拟环境，释放小磁盘 VPS 的空间。
+if [[ -d "${install_dir}/browsers" ]]; then
+    rm -rf "${install_dir}/browsers"
 fi
+if [[ -d "${install_dir}/.venv" ]]; then
+    rm -rf "${install_dir}/.venv"
+fi
+rm -f "${install_dir}/requirements.txt"
 
 if [[ -f ${env_file} ]]; then
     install -m 0600 "${env_file}" "${env_file}.bak"
@@ -33,12 +45,6 @@ if [[ -f ${env_file} ]]; then
 fi
 install -m 0600 "${local_env_file}" "${env_file}"
 echo "已安装 root-only 环境配置: ${env_file}"
-
-python3 -m venv "${install_dir}/.venv"
-"${install_dir}/.venv/bin/pip" install --upgrade pip
-"${install_dir}/.venv/bin/pip" install -r "${install_dir}/requirements.txt"
-PLAYWRIGHT_BROWSERS_PATH="${install_dir}/browsers" \
-    "${install_dir}/.venv/bin/python" -m playwright install --with-deps chromium
 
 install -m 0644 "${source_dir}/spd-automation.service" /etc/systemd/system/spd-automation.service
 install -m 0644 "${source_dir}/spd-automation.timer" /etc/systemd/system/spd-automation.timer

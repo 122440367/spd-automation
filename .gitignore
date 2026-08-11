@@ -1,6 +1,7 @@
 # Local deployment configuration contains the password.
 .env
 
-# Failure artifacts may contain page contents or other operational details.
-failure-*.png
-failure-*.html
+# Local Python cache and runtime state.
+__pycache__/
+*.pyc
+data/
