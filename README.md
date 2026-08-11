@@ -1,6 +1,6 @@
 # SPD Worker API 自动化 （自用）
 
-每天北京时间 09:00 自动执行：
+每天北京时间 08:00 自动执行：
 
 1. 调用 `POST /clear-uploaded-ips` 清空旧的待测速列表。
 2. 选择 `/root/ASNIPtest` 中当天修改的全部 CSV，逐个上传。
@@ -124,5 +124,5 @@ journalctl -u spd-telegram-cleanup.service -f
 - **临时状态自动过期**：任务快照和独立批次结果在 24 小时后由 KV 自动清理。
 - **安全选取文件**：每个 CSV 保持 20 秒不再变化后才上传。
 - **防止并发冲突**：测速任务和 Telegram 清理命令共用文件锁。
-- **可靠定时执行**：systemd timer 每天北京时间 09:00 运行，支持错过后补执行。
+- **可靠定时执行**：systemd timer 每天北京时间 08:00 运行，支持错过后补执行。
 - **Telegram 集成**：发送执行结果，并支持授权私聊使用 `/cleanup`。
