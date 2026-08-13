@@ -24,7 +24,10 @@ REAL_DATETIME = app.datetime
 
 
 class WorkerHandler(BaseHTTPRequestHandler):
+    seen_paths = []
+
     def do_POST(self):
+        self.seen_paths.append(self.path)
         assert self.headers.get("Authorization") == "Bearer test-token"
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
@@ -33,36 +36,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
         elif self.path == "/upload-ips":
             assert b'name="ipfile"' in body
             assert b'name="maxIPs"' in body
+            assert b"\r\n800\r\n" in body
             assert b"1.1.1.1" in body
             self.respond({"success": True, "count": 1, "addedCount": 1})
-        elif self.path == "/manual-speedtest":
-            payload = json.loads(body)
-            assert payload["maxTests"] == 20
-            assert payload["offset"] == 0
-            assert len(payload["runId"]) == 32
-            self.respond(
-                {
-                    "success": True,
-                    "tested": 1,
-                    "batchTested": 1,
-                    "attempted": 1,
-                    "nextOffset": 1,
-                    "total": 1,
-                    "complete": True,
-                    "runId": payload["runId"],
-                    "source": "uploaded",
-                    "duration": "100ms",
-                }
-            )
-        elif self.path == "/upload-to-github":
-            self.respond(
-                {
-                    "success": True,
-                    "count": 1,
-                    "repo": "owner/repo",
-                    "file": "niceip.txt",
-                }
-            )
         elif self.path == "/challenge":
             self.send_response(403)
             self.send_header("cf-mitigated", "challenge")
@@ -91,9 +67,7 @@ class ApiTests(unittest.TestCase):
         cls.thread.start()
         app.URL = f"http://127.0.0.1:{cls.server.server_port}/"
         app.API_TOKEN = "test-token"
-        app.MAX_PENDING_IPS = 300
-        app.SPEEDTEST_BATCH_SIZE = 20
-        app.SPEEDTEST_BATCH_RETRIES = 3
+        app.MAX_PENDING_IPS = 800
         app.STEP_DELAY_SECONDS = 0
 
     @classmethod
@@ -102,12 +76,25 @@ class ApiTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=2)
 
-    def test_complete_api_sequence(self):
+    def test_worker_upload_api_sequence(self):
         csv_path = Path(__file__).with_name("fixture.csv")
         self.assertEqual(app.clear_uploaded_ips()["count"], 0)
         self.assertEqual(app.upload_csv(csv_path)["count"], 1)
-        self.assertIn("测速完成", app.run_speedtest(1))
-        self.assertIn("owner/repo", app.upload_to_github())
+
+    def test_main_only_clears_and_uploads_to_worker(self):
+        csv_path = Path(__file__).with_name("fixture.csv")
+        WorkerHandler.seen_paths.clear()
+        with (
+            patch.object(app, "todays_csv", return_value=[csv_path]),
+            patch.object(app, "wait_for_stable_file"),
+            patch.object(app, "acquire_job_lock"),
+            patch.object(app, "send_telegram"),
+        ):
+            self.assertEqual(app.main(), 0)
+        self.assertEqual(
+            WorkerHandler.seen_paths,
+            ["/clear-uploaded-ips", "/upload-ips"],
+        )
 
     def test_todays_csv_selects_all_csv_files_from_today(self):
         fixture = Path(__file__).with_name("fixture.csv")
@@ -134,48 +121,6 @@ class ApiTests(unittest.TestCase):
             self.assertEqual([path.name for path in app.todays_csv(FixtureDirectory())], ["fixture.csv"])
         finally:
             app.datetime = original
-
-    def test_speedtest_runs_all_batches(self):
-        offsets = []
-
-        def fake_request(_path, **kwargs):
-            payload = json.loads(kwargs["body"])
-            offsets.append(payload["offset"])
-            next_offset = min(payload["offset"] + payload["maxTests"], 45)
-            return {
-                "success": True,
-                "batchTested": next_offset - payload["offset"],
-                "attempted": next_offset - payload["offset"],
-                "nextOffset": next_offset,
-                "total": 45,
-                "runId": payload["runId"],
-            }
-
-        with patch.object(app, "request_json", side_effect=fake_request):
-            self.assertIn("分 3 批", app.run_speedtest(45))
-        self.assertEqual(offsets, [0, 20, 40])
-
-    def test_speedtest_retry_reuses_run_id_and_offset(self):
-        payloads = []
-
-        def flaky_request(_path, **kwargs):
-            payload = json.loads(kwargs["body"])
-            payloads.append(payload)
-            if len(payloads) == 1:
-                raise RuntimeError("temporary failure")
-            return {
-                "success": True,
-                "batchTested": 1,
-                "attempted": 1,
-                "nextOffset": 1,
-                "total": 1,
-                "runId": payload["runId"],
-            }
-
-        with patch.object(app, "request_json", side_effect=flaky_request):
-            app.run_speedtest(1)
-        self.assertEqual(len(payloads), 2)
-        self.assertEqual(payloads[0], payloads[1])
 
     def test_cloudflare_challenge_is_reported(self):
         with self.assertRaisesRegex(RuntimeError, "Cloudflare Challenge"):

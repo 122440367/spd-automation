@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Upload today's CSV files, test their IPs in batches, then publish to GitHub."""
+"""Upload today's CSV files to the SPD Worker."""
 
 from __future__ import annotations
 
 import fcntl
 import json
 import logging
-import math
 import os
 import sys
 import time
@@ -22,11 +21,7 @@ URL = os.getenv("SPD_URL", "").strip()
 CSV_DIR = Path(os.getenv("SPD_CSV_DIR", "/root/ASNIPtest"))
 API_TOKEN = os.getenv("SPD_API_TOKEN", "").strip()
 UPLOAD_TIMEOUT_SECONDS = int(os.getenv("SPD_UPLOAD_TIMEOUT_SECONDS", "300"))
-SPEEDTEST_TIMEOUT_SECONDS = int(os.getenv("SPD_SPEEDTEST_TIMEOUT_SECONDS", "600"))
-GITHUB_TIMEOUT_SECONDS = int(os.getenv("SPD_GITHUB_TIMEOUT_SECONDS", "300"))
-MAX_PENDING_IPS = int(os.getenv("SPD_MAX_PENDING_IPS", "300"))
-SPEEDTEST_BATCH_SIZE = int(os.getenv("SPD_SPEEDTEST_BATCH_SIZE", "20"))
-SPEEDTEST_BATCH_RETRIES = int(os.getenv("SPD_SPEEDTEST_BATCH_RETRIES", "3"))
+MAX_PENDING_IPS = int(os.getenv("SPD_MAX_PENDING_IPS", "800"))
 STEP_DELAY_SECONDS = int(os.getenv("SPD_STEP_DELAY_SECONDS", "2"))
 FILE_STABLE_SECONDS = int(os.getenv("SPD_FILE_STABLE_SECONDS", "20"))
 FILE_STABLE_TIMEOUT_SECONDS = int(os.getenv("SPD_FILE_STABLE_TIMEOUT_SECONDS", "60"))
@@ -205,86 +200,6 @@ def upload_csv(csv_path: Path) -> dict:
     return data
 
 
-def run_speedtest(total_ips: int) -> str:
-    if total_ips <= 0:
-        raise RuntimeError("没有可测速的上传 IP")
-    offset = successful = attempted = batches = 0
-    run_id = uuid.uuid4().hex
-    deadline = time.monotonic() + SPEEDTEST_TIMEOUT_SECONDS
-    while offset < total_ips:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError(f"分批测速超过 {SPEEDTEST_TIMEOUT_SECONDS} 秒总时限")
-        batches += 1
-        LOG.info("开始第 %s 批测速: runId=%s, offset=%s, batchSize=%s", batches, run_id, offset, SPEEDTEST_BATCH_SIZE)
-        body = json.dumps({
-            "maxTests": SPEEDTEST_BATCH_SIZE,
-            "offset": offset,
-            "runId": run_id,
-        }).encode("utf-8")
-        data = None
-        for attempt in range(1, max(1, SPEEDTEST_BATCH_RETRIES) + 1):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError(f"分批测速超过 {SPEEDTEST_TIMEOUT_SECONDS} 秒总时限")
-            try:
-                data = require_success(
-                    request_json(
-                        "/manual-speedtest", method="POST", body=body,
-                        headers={"Content-Type": "application/json"},
-                        timeout=max(1, math.ceil(remaining)),
-                    ),
-                    "测速",
-                )
-                break
-            except RuntimeError:
-                if attempt >= max(1, SPEEDTEST_BATCH_RETRIES):
-                    raise
-                LOG.warning("第 %s 批请求失败，%s 秒后使用同一 runId 重试（%s/%s）", batches, STEP_DELAY_SECONDS, attempt, SPEEDTEST_BATCH_RETRIES)
-                if STEP_DELAY_SECONDS > 0:
-                    time.sleep(min(STEP_DELAY_SECONDS, max(0, deadline - time.monotonic())))
-        if data is None:
-            raise RuntimeError("Worker 测速未返回结果")
-        if data.get("runId") != run_id:
-            raise RuntimeError("Worker 返回了错误的 runId")
-        worker_total = int(data.get("total", total_ips))
-        if batches == 1:
-            total_ips = worker_total
-        elif worker_total != total_ips:
-            raise RuntimeError("同一测速任务返回的 IP 总数发生变化")
-        next_offset = int(data.get("nextOffset", offset + min(SPEEDTEST_BATCH_SIZE, total_ips - offset)))
-        if next_offset <= offset:
-            raise RuntimeError("Worker 测速没有推进进度")
-        previous_offset = offset
-        offset = min(next_offset, total_ips)
-        successful += int(data.get("batchTested", data.get("tested", 0)))
-        attempted += int(data.get("attempted", offset - previous_offset))
-        if offset < total_ips and STEP_DELAY_SECONDS > 0:
-            time.sleep(STEP_DELAY_SECONDS)
-    result = f"测速完成，尝试 {attempted} 个、成功 {successful} 个，分 {batches} 批"
-    LOG.info(result)
-    return result
-
-
-def upload_to_github() -> str:
-    LOG.info("触发 Worker 上传到 GitHub")
-    data = require_success(
-        request_json(
-            "/upload-to-github",
-            method="POST",
-            body=b"",
-            timeout=GITHUB_TIMEOUT_SECONDS,
-        ),
-        "GitHub 上传",
-    )
-    result = (
-        f"上传 {data.get('count', 0)} 个 IP 到 "
-        f"{data.get('repo', 'unknown')}/{data.get('file', 'niceip.txt')}"
-    )
-    LOG.info(result)
-    return result
-
-
 def send_telegram(message: str) -> None:
     if not TELEGRAM_BOT_TOKEN and not TELEGRAM_CHAT_ID:
         return
@@ -316,8 +231,6 @@ def main() -> int:
     csv_paths: list[Path] = []
     upload_result = ""
     total_uploaded = 0
-    speedtest_result = ""
-    github_result = ""
     job_lock = None
 
     try:
@@ -344,11 +257,7 @@ def main() -> int:
             total_uploaded = int(upload_data.get("count", 0))
             if index + 1 < len(csv_paths) and STEP_DELAY_SECONDS > 0:
                 time.sleep(STEP_DELAY_SECONDS)
-        upload_result = f"合并去重后 {total_uploaded} 个待测速 IP"
-        stage = "Worker API 测速"
-        speedtest_result = run_speedtest(total_uploaded)
-        stage = "上传到 GitHub"
-        github_result = upload_to_github()
+        upload_result = f"合并去重后已保存 {total_uploaded} 个 IP 到 Worker"
     except Exception as error:
         elapsed = round(time.monotonic() - started)
         LOG.exception("自动化任务失败，阶段=%s", stage)
@@ -369,8 +278,6 @@ def main() -> int:
         "✅ SPD 自动化执行成功\n"
         f"CSV: {', '.join(path.name for path in csv_paths)}\n"
         f"上传: {upload_result}\n"
-        f"测速: {speedtest_result}\n"
-        f"GitHub: {github_result}\n"
         f"耗时: {elapsed} 秒"
     )
     if job_lock is not None:

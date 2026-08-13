@@ -1,5 +1,5 @@
 [Unit]
-Description=Upload today's ASN CSV files to SPD, run speed tests, and publish to GitHub
+Description=Upload today's ASN CSV files to the SPD Worker
 Wants=network-online.target
 After=network-online.target
 
