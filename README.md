@@ -50,6 +50,66 @@ sudo journalctl -u spd-automation.service -f
 systemctl list-timers spd-automation.timer
 ```
 
+## 修改定时执行时间
+
+### systemd 部署
+
+systemd 默认每天按北京时间 `08:00` 执行。推荐使用 override 修改时间，这样以后
+更新项目或重新运行 `install.sh` 时不会覆盖自定义配置：
+
+```bash
+sudo systemctl edit spd-automation.timer
+```
+
+在打开的编辑器中填写以下内容。例如改为每天北京时间 `09:30` 执行：
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 09:30:00 Asia/Shanghai
+```
+
+第一条空的 `OnCalendar=` 用于清除原来的 `08:00`，不能省略。保存退出后，使配置
+生效并重新计算下一次运行时间：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart spd-automation.timer
+systemctl list-timers spd-automation.timer
+```
+
+查看当前最终生效的配置：
+
+```bash
+systemctl cat spd-automation.timer
+```
+
+如需恢复项目默认的每天北京时间 `08:00`：
+
+```bash
+sudo systemctl revert spd-automation.timer
+sudo systemctl daemon-reload
+sudo systemctl restart spd-automation.timer
+```
+
+### Docker Compose 部署
+
+编辑项目目录中的 `.env`，例如改为每天北京时间 `09:30`：
+
+```env
+SPD_DAILY_TIME=09:30
+TZ=Asia/Shanghai
+```
+
+`SPD_DAILY_TIME` 必须使用 24 小时制 `HH:MM` 格式。修改后重新创建容器并查看日志：
+
+```bash
+docker compose up -d --force-recreate
+docker compose logs -f spd-automation
+```
+
+不要同时启用 systemd timer 和 Docker 定时容器，否则同一任务可能重复执行。
+
 ## Docker Compose 部署
 
 先准备配置：
@@ -164,7 +224,7 @@ chat_id=replace_with_your_private_chat_id
 journalctl -u spd-telegram-cleanup.service -f
 ```
 
-## 技术特点
+## 技术总结
 
 - **低磁盘占用**：不安装浏览器、虚拟环境或第三方 Python 包，Docker 镜像基于 Alpine。
 - **状态驱动**：每一步验证 Worker 返回的 JSON 和 `success` 状态。
