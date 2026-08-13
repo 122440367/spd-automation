@@ -164,7 +164,7 @@ chat_id=replace_with_your_private_chat_id
 journalctl -u spd-telegram-cleanup.service -f
 ```
 
-## 项目亮点
+## 技术特点
 
 - **低磁盘占用**：不安装浏览器、虚拟环境或第三方 Python 包，Docker 镜像基于 Alpine。
 - **状态驱动**：每一步验证 Worker 返回的 JSON 和 `success` 状态。
