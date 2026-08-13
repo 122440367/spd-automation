@@ -1,6 +1,6 @@
 # SPD Worker API 自动化 （自用）
 
-每天北京时间 08:00 自动执行：
+每天北京时间 07:10 自动执行：
 
 1. 调用 `POST /clear-uploaded-ips` 清空旧的待测速列表。
 2. 选择 `/root/ASNIPtest` 中当天修改的全部 CSV，逐个上传。
@@ -54,7 +54,7 @@ systemctl list-timers spd-automation.timer
 
 ### systemd 部署
 
-systemd 默认每天按北京时间 `08:00` 执行。推荐使用 override 修改时间，这样以后
+systemd 默认每天按北京时间 `07:10` 执行。推荐使用 override 修改时间，这样以后
 更新项目或重新运行 `install.sh` 时不会覆盖自定义配置：
 
 ```bash
@@ -69,7 +69,7 @@ OnCalendar=
 OnCalendar=*-*-* 09:30:00 Asia/Shanghai
 ```
 
-第一条空的 `OnCalendar=` 用于清除原来的 `08:00`，不能省略。保存退出后，使配置
+第一条空的 `OnCalendar=` 用于清除原来的 `07:10`，不能省略。保存退出后，使配置
 生效并重新计算下一次运行时间：
 
 ```bash
@@ -84,7 +84,7 @@ systemctl list-timers spd-automation.timer
 systemctl cat spd-automation.timer
 ```
 
-如需恢复项目默认的每天北京时间 `08:00`：
+如需恢复项目默认的每天北京时间 `07:10`：
 
 ```bash
 sudo systemctl revert spd-automation.timer
@@ -135,11 +135,11 @@ docker compose up -d --build
 docker compose logs -f spd-automation
 ```
 
-容器使用北京时间，每天 08:00 执行。如果容器在 08:00 之后才启动且当天尚未
+容器使用北京时间，每天 07:10 执行。如果容器在 07:10 之后才启动且当天尚未
 执行，会立即补跑一次。可通过以下配置修改时间和时区：
 
 ```env
-SPD_DAILY_TIME=08:00
+SPD_DAILY_TIME=07:10
 TZ=Asia/Shanghai
 ```
 
@@ -182,7 +182,7 @@ sudo bash install.sh
 - `SPD_API_TOKEN`：Worker API Bearer Token，必填，必须与 Worker Secret 一致。
 - `SPD_CSV_DIR`：CSV 目录，默认 `/root/ASNIPtest`。
 - `SPD_CSV_HOST_DIR`：Docker Compose 挂载的宿主机 CSV 目录，默认 `/root/ASNIPtest`。
-- `SPD_DAILY_TIME`：Docker 容器每日执行时间，默认 `08:00`。
+- `SPD_DAILY_TIME`：Docker 容器每日执行时间，默认 `07:10`。
 - `TZ`：Docker 容器时区，默认 `Asia/Shanghai`。
 - `SPD_UPLOAD_TIMEOUT_SECONDS`：上传超时，默认 `300` 秒。
 - `SPD_MAX_PENDING_IPS`：上传到 Worker 的 IP 总数上限，默认和 Worker 上限均为 `800`。
@@ -235,6 +235,6 @@ journalctl -u spd-telegram-cleanup.service -f
 - **800 条上限**：客户端提交的 `maxIPs` 默认与 Worker 上限一致，均为 800。
 - **安全选取文件**：每个 CSV 保持 20 秒不再变化后才上传。
 - **防止并发冲突**：上传任务和 Telegram 清理命令共用文件锁。
-- **可靠定时执行**：systemd timer 每天北京时间 08:00 运行，支持错过后补执行。
+- **可靠定时执行**：systemd timer 每天北京时间 07:10 运行，支持错过后补执行。
 - **Docker 支持**：提供一次性运行和带补跑能力的每日定时容器。
 - **Telegram 集成**：发送执行结果，并支持授权私聊使用 `/cleanup`。

@@ -8,7 +8,7 @@ services:
     environment:
       SPD_CSV_DIR: /data/asniptest
       TZ: ${TZ:-Asia/Shanghai}
-      SPD_DAILY_TIME: ${SPD_DAILY_TIME:-08:00}
+      SPD_DAILY_TIME: ${SPD_DAILY_TIME:-07:10}
     volumes:
       - ${SPD_CSV_HOST_DIR:-/root/ASNIPtest}:/data/asniptest:ro
       - spd-state:/var/lib/spd-automation

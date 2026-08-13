@@ -83,7 +83,7 @@ def sleep_until(target: datetime) -> None:
 
 
 def schedule() -> int:
-    at = parse_daily_time(os.getenv("SPD_DAILY_TIME", "08:00"))
+    at = parse_daily_time(os.getenv("SPD_DAILY_TIME", "07:10"))
     LOG.info(
         "Docker 定时任务已启动，每天 %s 执行，当前时区=%s",
         at.strftime("%H:%M"),
