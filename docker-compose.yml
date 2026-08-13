@@ -1,0 +1,17 @@
+services:
+  spd-automation:
+    build: .
+    image: spd-automation:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SPD_CSV_DIR: /data/asniptest
+      TZ: ${TZ:-Asia/Shanghai}
+      SPD_DAILY_TIME: ${SPD_DAILY_TIME:-08:00}
+    volumes:
+      - ${SPD_CSV_HOST_DIR:-/root/ASNIPtest}:/data/asniptest:ro
+      - spd-state:/var/lib/spd-automation
+
+volumes:
+  spd-state:
